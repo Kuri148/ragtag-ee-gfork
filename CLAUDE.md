@@ -54,28 +54,30 @@ Say plainly in PR descriptions what was and wasn't tested.
 
 ## Mission System Architecture (Sandbox Campaign)
 
-### Five Mission Types with Progressive Compensation
+### Six Mission Types with Progressive Compensation
 
-**Base multipliers** (delivery = 1.0x baseline):
+**Base multipliers** (delivery = 1.0x baseline; `_TYPE_MULT` in `mission.lua`):
 1. **Delivery** (1.0x): Ferry cargo between stations. Safest, baseline income.
 2. **Salvage** (1.2x): Recover cargo pods from coordinates. Moderate risk.
 3. **Hacking** (1.4x): Breach comms relay systems (75% hack threshold). Technical challenge.
-4. **Destroy** (1.6x): Eliminate hostile targets completely. Combat-focused.
-5. **Boarding** (1.8x): Disable and board target ships. Highest difficulty.
+4. **Tailing** (1.4x): Shadow a target to a covert meeting and scan both ships. Science-led.
+5. **Destroy** (1.6x): Eliminate hostile targets completely. Combat-focused.
+6. **Boarding** (1.8x): Disable and board target ships. Highest difficulty.
 
-**Dynamic scaling**:
-- Distance bonus: +1% per U beyond 10U
+**Dynamic scaling** (`_calcReward`):
+- Base reward by tier: 50 / 75 / 100 (tiers 0-2), times the archetype's `reward_mult`
+- Distance bonus: 0-30%, scaled linearly across the mission type's min-max distance range (clamped)
 - Danger bonus: +15% per danger level (0-4: safe/risky/dangerous/deadly)
 - Final reward rounded to nearest 5 credits
 
-**Example**: A boarding mission (1.8x) 30U away in danger level 2 space pays:
-`base * 1.8 * (1 + 20% distance) * (1 + 30% danger) ≈ 2.8x base reward`
+**Example**: A tier-1 boarding mission (1.8x) at the midpoint of its distance range in danger level 2 space pays:
+`75 * 1.8 * (1 + 15% distance) * (1 + 30% danger) ≈ 200cr`
 
 ### Mission Generation Flow
 
 1. **Station offers 2 missions** when player docks and hails "Any work available?"
 2. **Type selection** via weighted random:
-   - delivery: 15, salvage: 7, boarding: 3, hacking: 3, destroy: 3
+   - delivery: 15, salvage: 7, boarding: 3, hacking: 3, tailing: 3, destroy: 3 (`_MISSION_WEIGHTS` in `scenario_80_sandbox.lua`)
 3. **Archetype selection** from mission.lua `_*_ARCHETYPES` tables (tier-gated)
 4. **Legacy intercept fields** in archetypes (`intercept_types`, `intercept_chance`) are no longer used as of 2026-10-29 (proximity spawn system replaced mission-specific intercepts)
 5. **Nearby stations** calculated for boarding/destroy (50U radius) → stored as `target_dest`
@@ -122,19 +124,29 @@ Say plainly in PR descriptions what was and wasn't tested.
 **Critical bug fixed 2026-10-28**: Spawning code was ignoring pre-calculated `target_dest` and picking a random station instead. Now uses `m.target_dest` directly.
 
 **Target behavior**:
-- Starts Independent faction, flying toward destination
+- Starts as **Unknown** faction (Science must scan to identify; low scan complexity), flying toward destination
 - **Boarding**: When player within 8U, switches to Corsairs and attacks
 - **Destroy**: When player within 8U, switches to Corsairs and attacks
 - Ships have full health/shields and can dock at stations (for future gameplay)
 
 ### Hacking Missions
 
-- Spawn custom "Comms Relay Beacon" template (only reactor system)
+- Relay spawns as a stock `ANT 615` template (a custom ShipTemplate crashed `init()`; see commits 6b7c0b9, 526416d)
 - Relay is stationary, Concord faction, cannot be destroyed
 - Player must hack **any system to 75%** (not just reactor, despite archetype field)
 - **Relay jamming**: Active relays neutralise scan probes within 5U (checked every 2s)
 - Mission completes when threshold reached
 - Ambient patrols may spawn based on zone (proximity system), not mission-specific
+
+### Tailing Missions
+
+- Target spawns as **Unknown** faction; ship log gives a "last spotted in <grid> heading <deg>" clue
+- A rendezvous ship (`Flavia P.Falcon`, Independent) converges with the target on a meeting point 20-35U from the target's spawn
+- **Before the meeting**, the target is spooked (mission fails) if a player ship or a scan probe (`isObjectType(obj, "ScanProbe")`) comes within **5U**
+- Meeting starts when target and rendezvous are within 1.5U; both go idle for a **60-second** scan window
+- Science must `isScannedBy` (simple scan, not full) **both** ships during the window, from any range; then return to the origin station to get paid
+- After success or timeout, `_tailingDisperse` sends both ships off to separate stations as normal traffic
+- Runtime logic lives in `JOBS.update` in `scenario_80_sandbox.lua`; generation in `MISSION.newTailing`
 
 ### Object Type Identification
 
