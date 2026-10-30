@@ -100,6 +100,23 @@ function JOBS.getMissionDistance()
     end
 end
 
+-- Pick a mission point at a random bearing from (rx, ry) that stays on the charted map.
+-- Tries several bearings at the rolled distance; if none fit (long mode near an edge),
+-- clamps to the map. Returns wx, wy and the actual distance (for reward scaling).
+function JOBS.pickMissionPoint(rx, ry)
+    local dist = JOBS.getMissionDistance()
+    local wx, wy
+    for _ = 1, 16 do
+        local ang = math.random() * 2 * math.pi
+        wx = math.floor(rx + math.cos(ang) * dist)
+        wy = math.floor(ry + math.sin(ang) * dist)
+        if VERSE.inBounds(wx, wy) then return wx, wy, dist end
+    end
+    wx, wy = VERSE.clampToBounds(wx, wy)
+    wx, wy = math.floor(wx), math.floor(wy)
+    return wx, wy, math.sqrt((wx - rx) ^ 2 + (wy - ry) ^ 2)
+end
+
 -- Get the distance range (min, max) for the current mode
 function JOBS.getDistanceRange()
     local mode = S.mission_distance_mode or "medium"
@@ -593,10 +610,7 @@ function JOBS.stationHook(source, target)
                     dest_idx = dest_idx + 1
                 elseif mtype == "salvage" and RT.valid(station_e) then
                     local rx, ry = station_e:getPosition()
-                    local ang  = math.random() * 2 * math.pi
-                    local dist = JOBS.getMissionDistance()
-                    local wx = math.floor(rx + math.cos(ang) * dist)
-                    local wy = math.floor(ry + math.sin(ang) * dist)
+                    local wx, wy, dist = JOBS.pickMissionPoint(rx, ry)
                     local region = VERSE.regionAt(wx, wy)
                     local danger_level = region and region.danger or 0
                     print(string.format("[SALVAGE] Station: %s (%d, %d) | Target: (%d, %d) | Dist: %.1fU (%.0f) | Slot %d",
@@ -622,10 +636,7 @@ function JOBS.stationHook(source, target)
                     end
                 elseif mtype == "boarding" and RT.valid(station_e) then
                     local rx, ry = station_e:getPosition()
-                    local ang  = math.random() * 2 * math.pi
-                    local dist = JOBS.getMissionDistance()
-                    local wx = math.floor(rx + math.cos(ang) * dist)
-                    local wy = math.floor(ry + math.sin(ang) * dist)
+                    local wx, wy, dist = JOBS.pickMissionPoint(rx, ry)
                     local region = VERSE.regionAt(wx, wy)
                     local danger_level = region and region.danger or 0
                     print(string.format("[BOARDING] Station: %s (%d, %d) | Target: (%d, %d) | Dist: %.1fU (%.0f) | Slot %d",
@@ -668,10 +679,7 @@ function JOBS.stationHook(source, target)
                     end
                 elseif (mtype == "hacking" or mtype == "destroy") and RT.valid(station_e) then
                     local rx, ry = station_e:getPosition()
-                    local ang  = math.random() * 2 * math.pi
-                    local dist = JOBS.getMissionDistance()
-                    local wx = math.floor(rx + math.cos(ang) * dist)
-                    local wy = math.floor(ry + math.sin(ang) * dist)
+                    local wx, wy, dist = JOBS.pickMissionPoint(rx, ry)
                     local region = VERSE.regionAt(wx, wy)
                     local danger_level = region and region.danger or 0
                     print(string.format("[%s] Station: %s (%d, %d) | Target: (%d, %d) | Dist: %.1fU (%.0f) | Slot %d",
@@ -736,15 +744,13 @@ function JOBS.stationHook(source, target)
                     end
                 elseif mtype == "tailing" and RT.valid(station_e) then
                     local rx, ry = station_e:getPosition()
-                    local ang  = math.random() * 2 * math.pi
-                    local dist = JOBS.getMissionDistance()
-                    local wx = math.floor(rx + math.cos(ang) * dist)
-                    local wy = math.floor(ry + math.sin(ang) * dist)
+                    local wx, wy, dist = JOBS.pickMissionPoint(rx, ry)
                     -- Meeting point: 20-35u from target spawn in a random direction
                     local meet_ang  = math.random() * 2 * math.pi
                     local meet_dist = (20 + math.random() * 15) * 1000
-                    local mx = math.floor(wx + math.cos(meet_ang) * meet_dist)
-                    local my = math.floor(wy + math.sin(meet_ang) * meet_dist)
+                    local mx, my = VERSE.clampToBounds(wx + math.cos(meet_ang) * meet_dist,
+                                                       wy + math.sin(meet_ang) * meet_dist)
+                    mx, my = math.floor(mx), math.floor(my)
                     local region = VERSE.regionAt(wx, wy)
                     local danger_level = region and region.danger or 0
                     print(string.format("[TAILING] Station: %s | Target: (%d,%d) | Meet: (%d,%d) | Dist: %.1fU | Slot %d",
@@ -1814,7 +1820,8 @@ function init()
     -- Custom Port Vesper comms: welcome message on first hail, standard message after
     local vesper = RT.find("Port Vesper")
     if RT.valid(vesper) then
-        vesper:setCommsFunction(function(source, target)
+        -- Stored on the global RT so the Back reply's first upvalue is _ENV (EE's ScriptSimpleCallback requires it)
+        RT.vesperComms = function(source, target)
             if source:isEnemy(target) then
                 setCommsMessage("Static. Then a click. They've cut the channel.")
                 return
@@ -1853,8 +1860,9 @@ function init()
                 end
             end
 
-            addCommsReply("Back", function() end)
-        end)
+            addCommsReply("Back", function(s, t) RT.vesperComms(s, t) end)
+        end
+        vesper:setCommsFunction(RT.vesperComms)
     end
 
     -- Wire mission board into every friendly station

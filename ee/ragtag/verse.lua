@@ -685,6 +685,34 @@ function VERSE.regionAt(x, y)
     return best
 end
 
+-- Charted map rectangle in world units: every region and station plus a margin.
+-- Lets scenarios keep randomly placed objects on the map (computed once, after build).
+function VERSE.bounds(margin_u)
+    if not VERSE._bounds then
+        local x0, y0, x1, y1 = math.huge, math.huge, -math.huge, -math.huge
+        local function grow(x, y, r)
+            x0, y0 = math.min(x0, x - r), math.min(y0, y - r)
+            x1, y1 = math.max(x1, x + r), math.max(y1, y + r)
+        end
+        for _, r in ipairs(VERSE.REGIONS) do grow(r.x, r.y, r.r) end
+        for _, s in ipairs(VERSE.STATIONS) do grow(s.x, s.y, 0) end
+        VERSE._bounds = {x0, y0, x1, y1}
+    end
+    local m = margin_u or 0
+    local b = VERSE._bounds
+    return (b[1] - m) * U, (b[2] - m) * U, (b[3] + m) * U, (b[4] + m) * U
+end
+
+function VERSE.inBounds(x, y, margin_u)
+    local x0, y0, x1, y1 = VERSE.bounds(margin_u)
+    return x >= x0 and x <= x1 and y >= y0 and y <= y1
+end
+
+function VERSE.clampToBounds(x, y, margin_u)
+    local x0, y0, x1, y1 = VERSE.bounds(margin_u)
+    return math.max(x0, math.min(x1, x)), math.max(y0, math.min(y1, y))
+end
+
 local DANGER_LABEL = {[0] = "safe", [1] = "risky", [2] = "dangerous", [3] = "DEADLY"}
 
 local function isDiscovered(name)

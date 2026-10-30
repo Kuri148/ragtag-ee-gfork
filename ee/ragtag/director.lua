@@ -18,45 +18,8 @@
 -- The scenario must stay fully playable with the director offline: every beat
 -- the AI may trigger should also have a deterministic fallback in the scenario.
 
--- EE's built-in toJSON fails with "invalid key to 'next'" whenever a table
--- has two or more values that are themselves non-empty tables.  Root cause:
--- a relative Lua C stack index in EE's toJSON becomes stale after recursing
--- into the first nested table, so the outer next() call gets the wrong table.
--- We use this minimal encoder for the mailbox write only; RT.saveCampaign()
--- and other callers that only nest empty tables are fine with EE's toJSON.
-local function _json(v, depth)
-    depth = depth or 0
-    local t = type(v)
-    if t == "nil" then return "null"
-    elseif t == "boolean" then return v and "true" or "false"
-    elseif t == "number" then
-        if v ~= v or v == math.huge or v == -math.huge then return "0" end
-        return (math.floor(v) == v) and string.format("%d", v) or string.format("%.10g", v)
-    elseif t == "string" then
-        return '"' .. v:gsub('\\','\\\\'):gsub('"','\\"'):gsub('\n','\\n')
-                       :gsub('\r','\\r'):gsub('\t','\\t')
-                       :gsub('[\x00-\x1f]', function(c)
-                           return string.format('\\u%04x', c:byte()) end) .. '"'
-    elseif t == "table" then
-        if depth > 30 then return '"<overflow>"' end
-        local n = #v
-        -- Array: consecutive integer keys starting at 1 with no gaps.
-        if n > 0 then
-            local parts = {}
-            for i = 1, n do parts[i] = _json(v[i], depth+1) end
-            return "[" .. table.concat(parts, ",") .. "]"
-        end
-        -- Object: string keys.
-        local parts = {}
-        for k, val in pairs(v) do
-            if type(k) == "string" then
-                table.insert(parts, '"'..k:gsub('\\','\\\\'):gsub('"','\\"')..'":'
-                                    .._json(val, depth+1))
-            end
-        end
-        return "{" .. table.concat(parts, ",") .. "}"
-    else return "null" end  -- userdata, function, thread
-end
+-- EE's built-in toJSON has a C stack-index bug; RT.json (core.lua) is the safe encoder.
+local _json = RT.json
 
 DIR = DIR or {}
 DIR.PROTO = 1

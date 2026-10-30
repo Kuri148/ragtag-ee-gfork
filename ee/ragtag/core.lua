@@ -39,6 +39,61 @@ function RT.valid(e)
     return e ~= nil and e:isValid()
 end
 
+-- EE's built-in toJSON fails with "invalid key to 'next'" whenever a table
+-- has two or more values that are themselves non-empty tables.  Root cause:
+-- a relative Lua C stack index in EE's toJSON becomes stale after recursing
+-- into the first nested table, so the outer next() call gets the wrong table.
+-- Use RT.json for anything written to script storage; fromJSON reads it back.
+function RT.json(v, depth)
+    depth = depth or 0
+    local t = type(v)
+    if t == "nil" then return "null"
+    elseif t == "boolean" then return v and "true" or "false"
+    elseif t == "number" then
+        if v ~= v or v == math.huge or v == -math.huge then return "0" end
+        return (math.floor(v) == v) and string.format("%d", v) or string.format("%.10g", v)
+    elseif t == "string" then
+        return '"' .. v:gsub('\\','\\\\'):gsub('"','\\"'):gsub('\n','\\n')
+                       :gsub('\r','\\r'):gsub('\t','\\t')
+                       :gsub('[\x00-\x1f]', function(c)
+                           return string.format('\\u%04x', c:byte()) end) .. '"'
+    elseif t == "table" then
+        if depth > 30 then return '"<overflow>"' end
+        local n = #v
+        -- Array: consecutive integer keys starting at 1 with no gaps.
+        if n > 0 then
+            local parts = {}
+            for i = 1, n do parts[i] = RT.json(v[i], depth+1) end
+            return "[" .. table.concat(parts, ",") .. "]"
+        end
+        -- Object: string keys.
+        local parts = {}
+        for k, val in pairs(v) do
+            if type(k) == "string" then
+                table.insert(parts, '"'..k:gsub('\\','\\\\'):gsub('"','\\"')..'":'
+                                    ..RT.json(val, depth+1))
+            end
+        end
+        return "{" .. table.concat(parts, ",") .. "}"
+    else return "null" end  -- userdata, function, thread
+end
+
+-- utils.lua only gained isObjectType() in 2025; EE-2024.12.08 (the current stable
+-- release) lacks it. Minimal stand-in for the types this project checks. Component
+-- lookups are pcall'd because unknown component names raise errors on older builds.
+if isObjectType == nil then
+    local _COMPONENT_FOR = {
+        ScanProbe       = "allow_radar_link",
+        CpuShip         = "ai_controller",
+        PlayerSpaceship = "player_control",
+    }
+    function isObjectType(obj, typ)
+        if not RT.valid(obj) or _COMPONENT_FOR[typ] == nil then return false end
+        local ok, c = pcall(function() return obj.components[_COMPONENT_FOR[typ]] end)
+        return ok and c ~= nil
+    end
+end
+
 function RT.now()
     return getScenarioTime()
 end
@@ -291,7 +346,7 @@ function RT.saveCampaign()
     if RT.valid(RT.player) then
         RT.campaign.credits = math.floor(RT.player:getReputationPoints())
     end
-    getScriptStorage():set(RT.CAMPAIGN_KEY, toJSON(RT.campaign))
+    getScriptStorage():set(RT.CAMPAIGN_KEY, RT.json(RT.campaign))
 end
 
 --------------------------------------------------------------------------------
@@ -383,7 +438,7 @@ function RT.saveShipRecord()
         rear_shield_pct  = rm > 0 and rs / rm or 0,
         energy_pct       = RT.player:getEnergy() / RT.player:getMaxEnergy(),
     }
-    getScriptStorage():set(RT.SHIP_KEY, toJSON(record))
+    getScriptStorage():set(RT.SHIP_KEY, RT.json(record))
     return record
 end
 
