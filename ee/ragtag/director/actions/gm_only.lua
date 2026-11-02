@@ -8,7 +8,7 @@ end
 DIR.ACTIONS.restore_campaign = function(a, cmd)
     if cmd.source ~= "gm" then return false, "GM only" end
     if type(a.campaign) ~= "table" then return false, "campaign table required" end
-    getScriptStorage():set(RT.CAMPAIGN_KEY, RT.json(a.campaign))
+    getScriptStorage():set(RT.CAMPAIGN_KEY, toJSON(a.campaign))
     RT.loadCampaign()
     return true, "campaign restored; restart the scenario to apply upgrades"
 end
